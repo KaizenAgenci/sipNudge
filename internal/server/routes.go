@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"sipNudge/internal/models"
 	"sipNudge/internal/utils"
 
@@ -35,8 +36,9 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 // Health check endpoint
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
-	jsonResp, _ := json.Marshal(s.db.Health())
-	_, _ = w.Write(jsonResp)
+//	jsonResp, _ := json.Marshal(s.db.Health())
+
+    json.NewEncoder(w).Encode("hello")
 }
 
 // Sign-in logic
@@ -111,7 +113,7 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwtSecret := []byte(s.db.Getenv("JWT_SECRET")) // Using database env for security
+	jwtSecret := []byte(os.Getenv("JWT_SECRET")) // Using database env for security
 	token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
 	})
