@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"sipNudge/internal/Constants"
 	"sipNudge/internal/models"
 	"sipNudge/internal/utils"
 
@@ -25,7 +27,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	}))
 
 	r.Get("/health", s.healthHandler)
-
+	r.Get("/api/v1/status", s.statusHandler) // New API to check server status
 	r.Post("/api/v1/signIn", s.handleSignIn)
 	r.Post("/api/v1/signUp", s.handleSignUp)
 	r.Post("/api/v1/refreshToken", s.handleRefreshToken)
@@ -37,6 +39,11 @@ func (s *Server) RegisterRoutes() http.Handler {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResp, _ := json.Marshal(s.db.Health())
 	_, _ = w.Write(jsonResp)
+}
+
+// Server status endpoint
+func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]string{"message": "Server working correctly"})
 }
 
 // Sign-in logic
@@ -111,7 +118,7 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwtSecret := []byte(s.db.Getenv("JWT_SECRET")) // Using database env for security
+	jwtSecret := []byte(os.Getenv(Constants.JwtSecret)) // Using database env for security
 	token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
 	})
