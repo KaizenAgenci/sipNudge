@@ -25,6 +25,7 @@ type Service interface {
 	Close() error
 	QueryRow(query string, args ...interface{}) *sql.Row
 	Exec(query string, args ...interface{}) (sql.Result, error)
+	CheckConnection() error
 }
 
 type service struct {
@@ -47,7 +48,9 @@ func New() Service {
 	}
 
 	// Opening a driver typically will not attempt to connect to the database.
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, dbname))
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, dbname)
+
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		// This will not be a connection error, but a DSN parse error or
 		// another initialization error.
@@ -130,4 +133,10 @@ func (s *service) Exec(query string, args ...interface{}) (sql.Result, error) {
 func (s *service) Close() error {
 	log.Printf("Disconnected from database: %s", dbname)
 	return s.db.Close()
+}
+
+// CheckConnection checks if the database connection is established.
+func (s *service) CheckConnection() error {
+	// Use Ping to check if the connection is alive
+	return s.db.Ping()
 }

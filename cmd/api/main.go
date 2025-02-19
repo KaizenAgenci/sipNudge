@@ -9,13 +9,12 @@ import (
 
 func main() {
 	server := server.NewServer()
-
-	log.Println("Server started on some port")
-
+	
 	err := server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP server error: %s", err)
 	}
+	
 
 	log.Println("Server has stopped.")
 }
