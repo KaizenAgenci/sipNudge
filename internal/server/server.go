@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sipNudge/internal/database"
 	"strconv"
 	"time"
 
-	"sipNudge/internal/database"
+	_ "github.com/joho/godotenv/autoload"
 
 	"github.com/joho/godotenv"
 )

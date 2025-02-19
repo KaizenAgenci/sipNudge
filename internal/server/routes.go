@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"sipNudge/internal/Constants"
+	Constants "sipNudge/internal/constants"
 	"sipNudge/internal/models"
 	"sipNudge/internal/utils"
 
@@ -37,8 +37,9 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 // Health check endpoint
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
-	jsonResp, _ := json.Marshal(s.db.Health())
-	_, _ = w.Write(jsonResp)
+	//	jsonResp, _ := json.Marshal(s.db.Health())
+
+	json.NewEncoder(w).Encode("hello")
 }
 
 // Server status endpoint
@@ -118,7 +119,7 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwtSecret := []byte(os.Getenv(Constants.JwtSecret)) // Using database env for security
+	jwtSecret := []byte(os.Getenv(Constants.DbName)) // Using database env for security
 	token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
 	})
