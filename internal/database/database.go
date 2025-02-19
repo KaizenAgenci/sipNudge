@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	Constants "sipNudge/internal/constants"
 	"strconv"
 	"time"
 
@@ -22,6 +23,8 @@ type Service interface {
 	// Close terminates the database connection.
 	// It returns an error if the connection cannot be closed.
 	Close() error
+	QueryRow(query string, args ...interface{}) *sql.Row
+	Exec(query string, args ...interface{}) (sql.Result, error)
 }
 
 type service struct {
@@ -29,11 +32,11 @@ type service struct {
 }
 
 var (
-	dbname     = os.Getenv("BLUEPRINT_DB_DATABASE")
-	password   = os.Getenv("BLUEPRINT_DB_PASSWORD")
-	username   = os.Getenv("BLUEPRINT_DB_USERNAME")
-	port       = os.Getenv("BLUEPRINT_DB_PORT")
-	host       = os.Getenv("BLUEPRINT_DB_HOST")
+	dbname     = os.Getenv(Constants.DbName)
+	username   = os.Getenv(Constants.DbUser)
+	password   = os.Getenv(Constants.DbPassword)
+	host       = os.Getenv(Constants.DbHost)
+	port       = os.Getenv(Constants.DbPort)
 	dbInstance *service
 )
 
@@ -108,6 +111,16 @@ func (s *service) Health() map[string]string {
 	}
 
 	return stats
+}
+
+// Execute single-row queries
+func (s *service) QueryRow(query string, args ...interface{}) *sql.Row {
+	return s.db.QueryRow(query, args...)
+}
+
+// Execute SQL commands
+func (s *service) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return s.db.Exec(query, args...)
 }
 
 // Close closes the database connection.

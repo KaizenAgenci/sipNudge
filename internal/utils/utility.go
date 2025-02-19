@@ -3,7 +3,7 @@ package utils
 import (
 	"errors"
 	"os"
-	"sipNudge/internal/Constants"
+	Constants "sipNudge/internal/constants"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
