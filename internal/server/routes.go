@@ -37,9 +37,14 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 // Health check endpoint
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
-	//	jsonResp, _ := json.Marshal(s.db.Health())
+	// Check database connection
+	if err := s.db.CheckConnection(); err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
 
-	json.NewEncoder(w).Encode("hello")
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte(`{"message": "Accepted"}`))
 }
 
 // Server status endpoint
