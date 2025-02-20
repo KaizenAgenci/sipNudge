@@ -12,3 +12,12 @@ type AuthResponse struct {
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refreshToken"`
 }
+
+type User struct {
+	ID             int    `json:"id"`
+	Email          string `json:"email"`
+	HasBiometrics  bool   `json:"has_biometrics"`
+	DeviceToken    string `json:"device_token,omitempty"`
+	IsBlocked      bool   `json:"is_blocked"`
+	FailedAttempts int    `json:"failed_attempts"`
+}

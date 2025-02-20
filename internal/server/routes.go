@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -31,7 +32,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r.Post("/api/v1/signIn", s.handleSignIn)
 	r.Post("/api/v1/signUp", s.handleSignUp)
 	r.Post("/api/v1/refreshToken", s.handleRefreshToken)
-
+	r.Get("/api/v1/users", s.handleFetchUsers)
 	return r
 }
 
@@ -144,4 +145,49 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	// 3. Remove old Tokens and store new ones in the db
 	// 4. return the new token as repsonse
 
+}
+
+// Fetch users with optional email filter
+func (s *Server) handleFetchUsers(w http.ResponseWriter, r *http.Request) {
+	email := r.URL.Query().Get("email") // Get email from query parameters
+
+	query := "SELECT id, email, has_biometrics, COALESCE(device_token, ''), is_blocked, failed_attempts FROM Users"
+	var rows *sql.Rows
+	var err error
+
+	if email != "" {
+		query += " WHERE email = ?"
+		rows, err = s.db.Query(query, email)
+	} else {
+		rows, err = s.db.Query(query)
+	}
+	if err != nil {
+		http.Error(w, "Failed to fetch users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []models.User
+
+	for rows.Next() {
+		var user models.User
+
+		err := rows.Scan(
+			&user.ID,
+			&user.Email,
+			&user.HasBiometrics,
+			&user.DeviceToken,
+			&user.IsBlocked,
+			&user.FailedAttempts,
+		)
+		if err != nil {
+			http.Error(w, "Error scanning user data: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		users = append(users, user)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(users) // Return users in JSON format
 }
