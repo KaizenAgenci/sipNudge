@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"sipNudge/internal/utils"
 	Constants "sipNudge/internal/constants"
 	"sipNudge/internal/models"
 
@@ -75,42 +76,50 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 
 // Sign-in logic
 func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
-	var req models.AuthRequest
+    var req models.AuthRequest
 
-	// Decode request body
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendResponse(w, http.StatusBadRequest, "Invalid request format", nil)
-		return
-	}
+    // Decode request body
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        sendResponse(w, http.StatusBadRequest, "Invalid request format", nil)
+        return
+    }
 
-	var hashedPassword string
+    var userID int
+    var hashedPassword string
 
-	// Fetch password hash from database
-	err := s.db.QueryRow("SELECT password_hash FROM Users WHERE email = ?", req.Email).Scan(&hashedPassword)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-		} else {
-			sendResponse(w, http.StatusInternalServerError, "Database error", nil)
-		}
-		return
-	}
+    // Fetch user ID and password hash from database
+    err := s.db.QueryRow("SELECT id, password_hash FROM Users WHERE email = ?", req.Email).Scan(&userID, &hashedPassword)
+    if err != nil {
+        if err == sql.ErrNoRows {
+            sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
+        } else {
+            sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+        }
+        return
+    }
 
-	// Verify password
-	if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
-		sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-		return
-	}
+    // Verify password
+    if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
+        sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
+        return
+    }
 
-	// Generate JWT token
-	// token, err := utils.GenerateTokens(req.Email)
-	// if err != nil {
-	// 	sendResponse(w, http.StatusInternalServerError, "Token generation failed", nil)
-	// 	return
-	// }
+    // Generate JWT token using the utils package (which includes the email in its claims)
+    token, err := utils.GenerateTokens(req.Email)
+    if err != nil {
+        sendResponse(w, http.StatusInternalServerError, "Token generation failed", nil)
+        return
+    }
 
-	// Successful response
-	sendResponse(w, http.StatusOK, "Password verified successfully", models.AuthResponse{Token: "dummyToken"})
+    // Store the token in the database (UserTokens table)
+    _, err = s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, token)
+    if err != nil {
+        sendResponse(w, http.StatusInternalServerError, "Failed to store token", nil)
+        return
+    }
+
+    // Successful response with the token
+    sendResponse(w, http.StatusOK, "Password verified successfully", models.AuthResponse{Token: token})
 }
 
 // Sign-up logic
