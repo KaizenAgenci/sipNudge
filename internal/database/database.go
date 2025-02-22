@@ -25,6 +25,7 @@ type Service interface {
 	Close() error
 	QueryRow(query string, args ...interface{}) *sql.Row
 	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
 	CheckConnection() error
 }
 
@@ -33,13 +34,23 @@ type service struct {
 }
 
 var (
-	dbname     = os.Getenv(Constants.DbName)
-	username   = os.Getenv(Constants.DbUser)
-	password   = os.Getenv(Constants.DbPassword)
-	host       = os.Getenv(Constants.DbHost)
-	port       = os.Getenv(Constants.DbPort)
+	dbname     = getEnv(Constants.DbName, "own db credentials")
+	username   = getEnv(Constants.DbUser, "your local db username")
+	password   = getEnv(Constants.DbPassword, "local db password")
+	host       = getEnv(Constants.DbHost, "db host")
+	port       = getEnv(Constants.DbPort, "3306") // this won't change so far deafult port for mysql
 	dbInstance *service
 )
+
+// getEnv fetches the value of an environment variable or returns a default value if not found.
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Printf("Warning: %s not found in .env, using default: %s", key, defaultValue)
+		return defaultValue
+	}
+	return value
+}
 
 func New() Service {
 	// Reuse Connection
@@ -49,6 +60,7 @@ func New() Service {
 
 	// Opening a driver typically will not attempt to connect to the database.
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, dbname)
+	log.Printf("DB Connection Info: user=%s, host=%s, port=%s, dbname=%s", username, host, port, dbname)
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -124,6 +136,11 @@ func (s *service) QueryRow(query string, args ...interface{}) *sql.Row {
 // Execute SQL commands
 func (s *service) Exec(query string, args ...interface{}) (sql.Result, error) {
 	return s.db.Exec(query, args...)
+}
+
+// Query executes a query that returns multiple rows
+func (s *service) Query(query string, args ...interface{}) (*sql.Rows, error) {
+	return s.db.Query(query, args...)
 }
 
 // Close closes the database connection.
