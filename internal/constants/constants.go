@@ -1,10 +1,13 @@
-package Constants
+package constants
 
 import "time"
 
 // auth constants
 const (
-	TokenExpiry = 30 * 24 * time.Hour
+	// Access tokens expire in 1 hour.
+    AccessTokenExpiry = time.Hour * 1
+    // Refresh tokens expire in 30 days.
+    RefreshTokenExpiry = 30 * 24 * time.Hour
 )
 
 const (

@@ -6,7 +6,8 @@ type AuthRequest struct {
 }
 
 type AuthResponse struct {
-	Token string `json:"token"`
+	Token string `json:"token"` // access token
+	RefreshToken string `json:"refresh_token"` // Refresh token
 }
 
 type RefreshTokenRequest struct {

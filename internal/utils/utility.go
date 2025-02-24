@@ -2,30 +2,61 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"os"
-	Constants "sipNudge/internal/constants"
 	"time"
+
+	"sipNudge/internal/constants"
 
 	"github.com/golang-jwt/jwt/v4"
 )
 
-// Generate Tokens
+// GenerateTokens generates a JWT token for the provided email.
 func GenerateTokens(email string) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		Constants.Email:  email,
-		Constants.Expiry: time.Now().Add(Constants.TokenExpiry).Unix(),
-	})
-
-	jwtSecret := os.Getenv(Constants.JwtSecret)
-
-	tokenString, err := token.SignedString(jwtSecret)
-	if err != nil {
-		return "", errors.New("error occured at token signed string")
+	// Define token claims including the email.
+	claims := jwt.MapClaims{
+		"email": email,                                        // email is added as a claim
+		"exp":   time.Now().Add(constants.AccessTokenExpiry).Unix(), // expiration time
+		"iat":   time.Now().Unix(),                            // issued at
 	}
-	//TODO store token in DB
+
+	// Create a new token with the claims.
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// Get the JWT secret from environment variables.
+	jwtSecret := os.Getenv(constants.JwtSecret)
+	if jwtSecret == "" {
+		return "", errors.New("JWT secret not set in environment variables")
+	}
+
+	// Sign the token using the secret converted to a byte slice.
+	tokenString, err := token.SignedString([]byte(jwtSecret))
+	if err != nil {
+		return "", fmt.Errorf("error signing token: %w", err)
+	}
 
 	return tokenString, nil
 }
+
+
+func GenerateRefreshToken(email string) (string, error) {
+	claims := jwt.MapClaims{
+		"email": email,
+		"exp":   time.Now().Add(constants.RefreshTokenExpiry).Unix(), // refresh token expiry
+		"iat":   time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	jwtSecret := os.Getenv(constants.JwtSecret)
+	if jwtSecret == "" {
+		return "", errors.New("JWT secret not set in environment variables")
+	}
+	tokenString, err := token.SignedString([]byte(jwtSecret))
+	if err != nil {
+		return "", fmt.Errorf("error signing refresh token: %w", err)
+	}
+	return tokenString, nil
+}
+
 
 // // Generate Access and Refresh Tokens
 // func generateTokens(email string) (string, string, error) {
