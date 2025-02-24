@@ -18,7 +18,7 @@ import (
 type Service interface {
 	// Health returns a map of health status information.
 	// The keys and values in the map are service-specific.
-	Begin() (*sql.Tx, error) //****************************************************
+	
 	Health() map[string]string
 
 	// Close terminates the database connection.
@@ -52,9 +52,8 @@ func getEnv(key, defaultValue string) string {
 	}
 	return value
 }
-func (s *service) Begin() (*sql.Tx, error) {
-	return s.db.Begin()
-}
+//begin function
+
 
 
 func New() Service {
@@ -76,9 +75,6 @@ func New() Service {
 	db.SetConnMaxLifetime(0)
 	db.SetMaxIdleConns(50)
 	db.SetMaxOpenConns(50)
-
-		// Initialize Tables***************************************************************
-		initializeDBTables(db)
 
 	dbInstance = &service{
 		db: db,
@@ -136,6 +132,7 @@ func (s *service) Health() map[string]string {
 	return stats
 }
 
+
 // Execute single-row queries
 func (s *service) QueryRow(query string, args ...interface{}) *sql.Row {
 	return s.db.QueryRow(query, args...)
@@ -165,70 +162,3 @@ func (s *service) CheckConnection() error {
 	// Use Ping to check if the connection is alive
 	return s.db.Ping()
 }
-
-
-// did by me*******************************************************************************
-func initializeDBTables(db *sql.DB) {
-	tables := []string{
-		`CREATE TABLE IF NOT EXISTS LoginStatus (
-    	user_id INT PRIMARY KEY,
-    	jwt_token VARCHAR(1024),
-    	is_blocked BOOLEAN DEFAULT FALSE,
-    	failed_attempts INT DEFAULT 0,
-    	last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    	last_failed_attempt TIMESTAMP DEFAULT NULL,
-    	FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-		);`,
-		`CREATE TABLE IF NOT EXISTS PasswordResets (
-    	id INT AUTO_INCREMENT PRIMARY KEY,
-    	user_id INT,
-    	otp_code VARCHAR(10) NOT NULL,
-    	created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    	expires_at TIMESTAMP GENERATED ALWAYS AS (created_at + INTERVAL 10 MINUTE) VIRTUAL,
-    	is_used BOOLEAN DEFAULT FALSE,
-    	failed_attempts INT DEFAULT 0,
-    	FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-			);`,
-
-		`CREATE TABLE IF NOT EXISTS Users (
-			id INT AUTO_INCREMENT PRIMARY KEY,
-			email VARCHAR(255) UNIQUE NOT NULL,
-			password_hash VARCHAR(255),
-			google_id VARCHAR(255) UNIQUE,
-			apple_id VARCHAR(255) UNIQUE,
-			has_biometrics BOOLEAN DEFAULT FALSE,
-			device_token VARCHAR(255) UNIQUE,
-			is_blocked BOOLEAN DEFAULT FALSE,
-			failed_attempts INT DEFAULT 0,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
-
-		`CREATE TABLE IF NOT EXISTS UserDetails (
-			user_id INT PRIMARY KEY,
-			gender ENUM('M', 'F', 'Other') NOT NULL,
-			height_cm FLOAT,
-			weight_kg FLOAT,
-			age INT,
-			wakeup_time TIME,
-			bedtime TIME,
-			activity_level ENUM('Low', 'Moderate', 'High'),
-			FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-		);`,
-
-		`CREATE TABLE IF NOT EXISTS SPN_PasswordResets (
-			user_id INT,
-			otp_code VARCHAR(10) NOT NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			is_used BOOLEAN DEFAULT FALSE,
-			FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-		);`,
-	}
-
-	for _, query := range tables {
-		_, err := db.Exec(query)
-		if err != nil {
-			log.Fatalf("Error initializing table: %v", err)
-		}
-	}
-}
-
