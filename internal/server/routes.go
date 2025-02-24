@@ -16,6 +16,8 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
+
+	"gopkg.in/gomail.v2"
 )
 
 // RegisterRoutes initializes all server routes
@@ -213,6 +215,43 @@ func generateOTP() string {
 	return fmt.Sprintf("%06d", n)
 }
 
+//to send the email to the user
+
+func sendEmailOTP(email, otp string) error {
+	//just to check what the issueis here
+	smtpEmail := os.Getenv("SMTP_EMAIL")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	// Debug logs
+	log.Printf(" Debug: SMTP_EMAIL = %s", smtpEmail)
+	log.Printf(" Debug: SMTP_PASSWORD is set: %t", smtpPass != "")
+	log.Printf(" Debug: SMTP_HOST = %s", smtpHost)
+	log.Printf(" Debug: SMTP_PORT = %s", smtpPort)
+
+	if smtpEmail == "" || smtpPass == "" {
+		log.Println(" SMTP credentials are missing! Check your .env file.")
+		return fmt.Errorf("SMTP credentials are missing")
+	}
+
+	m := gomail.NewMessage()
+	m.SetHeader("From", os.Getenv("SMTP_EMAIL"))
+	m.SetHeader("To", email)
+	m.SetHeader("Subject", "Your OTP Code")
+	m.SetBody("text/plain", fmt.Sprintf("Your OTP code is: %s\nIt is valid for 10 minutes.", otp))
+
+	d := gomail.NewDialer("smtp.gmail.com", 587, os.Getenv("SMTP_EMAIL"), os.Getenv("SMTP_PASSWORD"))
+	// return d.DialAndSend(m)
+	err := d.DialAndSend(m)
+	if err != nil {
+		log.Printf("Error sending email: %v", err) // Log the actual error
+		return err
+	}
+
+	log.Println("Email sent successfully!")
+	return nil
+}
+
 // Send OTP for password reset
 func (s *Server) sendOTP(w http.ResponseWriter, r *http.Request) {
 	var req models.OTPRequest
@@ -240,10 +279,16 @@ func (s *Server) sendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: Send OTP via email or SMS
-	sendResponse(w, http.StatusOK, "OTP sent successfully", nil)
+	err = sendEmailOTP(req.Email, otp)
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Failed to send OTP email", nil)
+		return
+	}
+
+	sendResponse(w, http.StatusOK, "OTP sent successfully to email", nil)
 }
 
-// Verify OTP
+// Verify OTP*****************************************************************************
 func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	var req models.VerifyOTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -251,22 +296,146 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID int
-	err := s.db.QueryRow("SELECT user_id FROM SPN_PasswordResets WHERE otp_code = ? AND is_used = FALSE AND created_at >= NOW() - INTERVAL 10 MINUTE", req.OTP).Scan(&userID)
+	var userID, failedAttempts int
+	var isBlocked bool
+
+	// 🚀 Ensure DB is not nil before transaction
+	if s.db == nil {
+		log.Fatal(" Database connection is nil.")
+		sendResponse(w, http.StatusInternalServerError, "Database connection error", nil)
+		return
+	}
+
+	// 🟢 Begin transaction
+	tx, err := s.db.Begin()
 	if err != nil {
+		log.Println(" Error starting transaction:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		return
+	}
+	defer tx.Rollback() // Ensure rollback on failure
+
+	// 🔍 Step 1: Fetch user ID from OTP
+	err = tx.QueryRow(`
+		SELECT user_id FROM PasswordResets 
+		WHERE otp_code = ? AND is_used = FALSE 
+		AND created_at >= NOW() - INTERVAL 10 MINUTE 
+		FOR UPDATE`, req.OTP).Scan(&userID)
+
+	if err == sql.ErrNoRows {
+		log.Println(" OTP does not exist or is expired.")
+		sendResponse(w, http.StatusUnauthorized, "Invalid or expired OTP", nil)
+		return
+	} else if err != nil {
+		log.Println(" Error fetching OTP:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		return
+	}
+
+	log.Println(" User found from OTP:", userID)
+
+	// Step 2: Ensure user exists in LoginStatus
+	err = tx.QueryRow(`SELECT is_blocked, failed_attempts FROM LoginStatus WHERE user_id = ? FOR UPDATE`, userID).Scan(&isBlocked, &failedAttempts)
+
+	if err == sql.ErrNoRows {
+		log.Println(" No entry in LoginStatus for user:", userID, "Creating new record.")
+		_, err = tx.Exec("INSERT INTO LoginStatus (user_id, failed_attempts, is_blocked) VALUES (?, 0, FALSE)", userID)
+		if err != nil {
+			log.Println(" Error creating LoginStatus entry:", err)
+			sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+			return
+		}
+		failedAttempts = 0
+		isBlocked = false
+	} else if err != nil {
+		log.Println(" Error fetching LoginStatus:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		return
+	}
+	log.Println("🔍 LoginStatus - User:", userID, "| Blocked:", isBlocked, "| Failed Attempts:", failedAttempts)
+
+	//  Step 3: If user is already blocked, deny access immediately
+	if isBlocked {
+		log.Println(" User is already blocked:", userID)
+		sendResponse(w, http.StatusForbidden, "Your account is blocked due to multiple failed attempts", nil)
+		return
+	}
+
+	//  Step 4: Handle Incorrect OTP Attempts
+	if userID == 0 {
+		log.Println(" Invalid OTP, user ID is 0")
 		sendResponse(w, http.StatusUnauthorized, "Invalid or expired OTP", nil)
 		return
 	}
 
-	// Mark OTP as used
-	_, err = s.db.Exec("UPDATE SPN_PasswordResets SET is_used = TRUE WHERE otp_code = ?", req.OTP)
+	// Increment failed attempts and check affected rows
+	result, err := tx.Exec("UPDATE LoginStatus SET failed_attempts = failed_attempts + 1 WHERE user_id = ?", userID)
 	if err != nil {
+		log.Println(" Failed to update failed attempts:", err)
+		sendResponse(w, http.StatusInternalServerError, "Failed to update failed attempts", nil)
+		return
+	}
+	rowsAffected, _ := result.RowsAffected()
+	log.Println(" Rows affected by failed_attempts update:", rowsAffected)
+	if rowsAffected == 0 {
+		log.Println(" WARNING: No rows updated! Is user_id correct?", userID)
+		sendResponse(w, http.StatusInternalServerError, "Failed to update attempts", nil)
+		return
+	}
+
+	//  Fetch updated failed attempts count
+	err = tx.QueryRow("SELECT failed_attempts FROM LoginStatus WHERE user_id = ?", userID).Scan(&failedAttempts)
+	if err != nil {
+		log.Println(" Failed to fetch failed attempts:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		return
+	}
+
+	log.Println(" Updated Failed Attempts for user", userID, ":", failedAttempts)
+
+	// Step 5: Block user after 3 failed attempts
+	if failedAttempts >= 3 {
+		_, err = tx.Exec("UPDATE LoginStatus SET is_blocked = TRUE WHERE user_id = ?", userID)
+		if err != nil {
+			log.Println(" Failed to block user:", err)
+			sendResponse(w, http.StatusInternalServerError, "Failed to block user", nil)
+			return
+		}
+		log.Println(" User blocked due to too many failed attempts:", userID)
+		tx.Commit()
+		sendResponse(w, http.StatusForbidden, "Too many failed attempts. Your account is blocked.", nil)
+		return
+	}
+
+	//  Step 6: If OTP is correct, mark it as used and reset failed attempts
+	_, err = tx.Exec("UPDATE PasswordResets SET is_used = TRUE WHERE otp_code = ?", req.OTP)
+	if err != nil {
+		log.Println(" Failed to update OTP status:", err)
 		sendResponse(w, http.StatusInternalServerError, "Failed to update OTP status", nil)
 		return
 	}
 
+	//  Reset failed attempts count to 0
+	_, err = tx.Exec("UPDATE LoginStatus SET failed_attempts = 0 WHERE user_id = ?", userID)
+	if err != nil {
+		log.Println(" Failed to reset failed attempts:", err)
+		sendResponse(w, http.StatusInternalServerError, "Failed to reset failed attempts", nil)
+		return
+	}
+
+	//  Commit transaction
+	err = tx.Commit()
+	if err != nil {
+		log.Println(" Transaction commit failed:", err)
+		sendResponse(w, http.StatusInternalServerError, "Transaction error", nil)
+		return
+	}
+
+	log.Println("OTP verified successfully for user:", userID)
 	sendResponse(w, http.StatusOK, "OTP verified successfully", nil)
 }
+
+// ********************************************************************************************
 
 // Reset password
 func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
@@ -275,14 +444,35 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		sendResponse(w, http.StatusBadRequest, "Invalid request format", nil)
 		return
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Println(" Error starting transaction:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		return
+	}
+	defer tx.Rollback() // Rollback on failure
 
 	var userID int
 	var oldPasswordHash string
-	err := s.db.QueryRow("SELECT u.id, u.password_hash FROM Users u JOIN SPN_PasswordResets pr ON u.id = pr.user_id WHERE pr.otp_code = ? AND pr.is_used = TRUE", req.OTP).Scan(&userID, &oldPasswordHash)
-	if err != nil {
-		sendResponse(w, http.StatusUnauthorized, "Invalid OTP", nil)
+
+	// 🔍 Step 1: Fetch user ID & old password where OTP is **not used**
+	err = tx.QueryRow(`
+		SELECT u.id, u.password_hash 
+		FROM Users u 
+		JOIN PasswordResets pr ON u.id = pr.user_id 
+		WHERE pr.otp_code = ? AND pr.is_used = FALSE 
+		FOR UPDATE`, req.OTP).Scan(&userID, &oldPasswordHash)
+
+	if err == sql.ErrNoRows {
+		log.Println(" Invalid OTP or OTP already used:", req.OTP)
+		sendResponse(w, http.StatusUnauthorized, "Invalid or expired OTP", nil)
+		return
+	} else if err != nil {
+		log.Println(" Error fetching OTP details:", err)
+		sendResponse(w, http.StatusInternalServerError, "Database error", nil)
 		return
 	}
+	log.Println(" User found for OTP:", userID)
 
 	// Hash new password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
