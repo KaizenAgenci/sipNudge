@@ -15,8 +15,8 @@ import (
 func GenerateTokens(email string) (string, error) {
 	// Define token claims including the email.
 	claims := jwt.MapClaims{
-		"email": email, // email is added as a claim
-		"exp":   time.Now().Add(constants.TokenExpiry).Unix(), // expiration time
+		"email": email,                                        // email is added as a claim
+		"exp":   time.Now().Add(constants.AccessTokenExpiry).Unix(), // expiration time
 		"iat":   time.Now().Unix(),                            // issued at
 	}
 
@@ -35,6 +35,25 @@ func GenerateTokens(email string) (string, error) {
 		return "", fmt.Errorf("error signing token: %w", err)
 	}
 
+	return tokenString, nil
+}
+
+
+func GenerateRefreshToken(email string) (string, error) {
+	claims := jwt.MapClaims{
+		"email": email,
+		"exp":   time.Now().Add(constants.RefreshTokenExpiry).Unix(), // refresh token expiry
+		"iat":   time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	jwtSecret := os.Getenv(constants.JwtSecret)
+	if jwtSecret == "" {
+		return "", errors.New("JWT secret not set in environment variables")
+	}
+	tokenString, err := token.SignedString([]byte(jwtSecret))
+	if err != nil {
+		return "", fmt.Errorf("error signing refresh token: %w", err)
+	}
 	return tokenString, nil
 }
 
