@@ -18,6 +18,8 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
+
+	"gopkg.in/gomail.v2"
 )
 
 // RegisterRoutes initializes all server routes
@@ -257,6 +259,43 @@ func generateOTP() string {
 	return fmt.Sprintf("%06d", n)
 }
 
+//to send the email to the user
+
+func sendEmailOTP(email, otp string) error {
+	//just to check what the issueis here
+	smtpEmail := os.Getenv("SMTP_EMAIL")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	// Debug logs
+	log.Printf(" Debug: SMTP_EMAIL = %s", smtpEmail)
+	log.Printf(" Debug: SMTP_PASSWORD is set: %t", smtpPass != "")
+	log.Printf(" Debug: SMTP_HOST = %s", smtpHost)
+	log.Printf(" Debug: SMTP_PORT = %s", smtpPort)
+
+	if smtpEmail == "" || smtpPass == "" {
+		log.Println(" SMTP credentials are missing! Check your .env file.")
+		return fmt.Errorf("SMTP credentials are missing")
+	}
+
+	m := gomail.NewMessage()
+	m.SetHeader("From", os.Getenv("SMTP_EMAIL"))
+	m.SetHeader("To", email)
+	m.SetHeader("Subject", "Your OTP Code")
+	m.SetBody("text/plain", fmt.Sprintf("Your OTP code is: %s\nIt is valid for 10 minutes.", otp))
+
+	d := gomail.NewDialer("smtp.gmail.com", 587, os.Getenv("SMTP_EMAIL"), os.Getenv("SMTP_PASSWORD"))
+	// return d.DialAndSend(m)
+	err := d.DialAndSend(m)
+	if err != nil {
+		log.Printf("Error sending email: %v", err) // Log the actual error
+		return err
+	}
+
+	log.Println("Email sent successfully!")
+	return nil
+}
+
 // Send OTP for password reset
 func (s *Server) sendOTP(w http.ResponseWriter, r *http.Request) {
 	var req models.OTPRequest
@@ -284,7 +323,13 @@ func (s *Server) sendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: Send OTP via email or SMS
-	sendResponse(w, http.StatusOK, "OTP sent successfully", nil)
+	err = sendEmailOTP(req.Email, otp)
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Failed to send OTP email", nil)
+		return
+	}
+
+	sendResponse(w, http.StatusOK, "OTP sent successfully to email", nil)
 }
 
 // Verify OTP
@@ -311,7 +356,6 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	sendResponse(w, http.StatusOK, "OTP verified successfully", nil)
 }
-
 // Reset password
 func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	var req models.ResetPasswordRequest

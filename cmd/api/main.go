@@ -3,11 +3,11 @@ package main
 import (
 	"log"
 	"net/http"
-
 	"sipNudge/internal/server"
 )
 
 func main() {
+	
 	server := server.NewServer()
 
 	err := server.ListenAndServe()

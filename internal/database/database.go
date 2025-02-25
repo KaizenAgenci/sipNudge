@@ -18,6 +18,7 @@ import (
 type Service interface {
 	// Health returns a map of health status information.
 	// The keys and values in the map are service-specific.
+	
 	Health() map[string]string
 
 	// Close terminates the database connection.
@@ -51,6 +52,9 @@ func getEnv(key, defaultValue string) string {
 	}
 	return value
 }
+//begin function
+
+
 
 func New() Service {
 	// Reuse Connection
@@ -127,6 +131,7 @@ func (s *service) Health() map[string]string {
 
 	return stats
 }
+
 
 // Execute single-row queries
 func (s *service) QueryRow(query string, args ...interface{}) *sql.Row {

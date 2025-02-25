@@ -62,6 +62,7 @@ func TestMain(m *testing.M) {
 	}
 }
 
+
 func TestNew(t *testing.T) {
 	srv := New()
 	if srv == nil {
