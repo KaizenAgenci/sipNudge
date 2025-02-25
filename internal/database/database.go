@@ -35,10 +35,10 @@ type service struct {
 }
 
 var (
-	dbname     = getEnv(Constants.DbName, "u861689103_fitworks")
-	username   = getEnv(Constants.DbUser, "u861689103_FitWorksAdmin")
-	password   = getEnv(Constants.DbPassword, "FitWorks@2024")
-	host       = getEnv(Constants.DbHost, "auth-db1742.hstgr.io")
+	dbname     = getEnv(Constants.DbName, "")
+	username   = getEnv(Constants.DbUser, "")
+	password   = getEnv(Constants.DbPassword, "")
+	host       = getEnv(Constants.DbHost, "")
 	port       = getEnv(Constants.DbPort, "3306") // this won't change so far deafult port for mysql
 	dbInstance *service
 )
