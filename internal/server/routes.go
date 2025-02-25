@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	Constants "sipNudge/internal/constants"
+	"sipNudge/internal/middleware"
 	"sipNudge/internal/models"
 	"sipNudge/internal/utils"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
@@ -34,18 +36,23 @@ func (s *Server) RegisterRoutes() http.Handler {
 		MaxAge:           300,
 	}))
 
-	r.Get("/health", s.healthHandler)
-	r.Get("/api/v1/status", s.statusHandler) // New API to check server status
 	r.Post("/api/v1/signIn", s.handleSignIn)
 	r.Post("/api/v1/signUp", s.handleSignUp)
-	r.Post("/api/v1/logout", s.handleLogout)
-	r.Post("/api/v1/addUserDetails", s.handleAddUserDetails)
-	r.Post("/api/v1/refreshToken", s.handleRefreshToken)
-	r.Get("/api/v1/userLoginDetails", s.fetchUserLoginDetails)
-	r.Get("/api/v1/userDetails", s.fetchUserDetails)
-	r.Post("/api/v1/sendOTP", s.sendOTP)
-	r.Post("/api/v1/verifyOTP", s.verifyOTP)
-	r.Post("/api/v1/resetPassword", s.resetPassword)
+	// Protected routes group:
+	r.Group(func(r chi.Router) {
+		// Pass your DB connection to the middleware.
+		r.Use(middleware.JWTAuthMiddleware(s.db))
+		r.Post("/api/v1/addUserDetails", s.handleAddUserDetails)
+		r.Post("/api/v1/logout", s.handleLogout)
+		r.Get("/health", s.healthHandler)
+		r.Get("/api/v1/status", s.statusHandler)
+		r.Post("/api/v1/refreshToken", s.handleRefreshToken)
+		r.Get("/api/v1/userLoginDetails", s.fetchUserLoginDetails)
+		r.Get("/api/v1/userDetails", s.fetchUserDetails)
+		r.Post("/api/v1/sendOTP", s.sendOTP)
+		r.Post("/api/v1/verifyOTP", s.verifyOTP)
+		r.Post("/api/v1/resetPassword", s.resetPassword)
+	})
 	return r
 }
 
@@ -86,14 +93,10 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID int
-	var hashedPassword string
-	var failedAttempts int
-	var isBlocked bool
-
-	// Fetch user info including failed_attempts and is_blocked
-	err := s.db.QueryRow("SELECT id, password_hash, failed_attempts, is_blocked FROM Users WHERE email = ?", req.Email).
-		Scan(&userID, &hashedPassword, &failedAttempts, &isBlocked)
+	var user models.User
+	var hashedPassword, accessToken, refreshToken string
+	err := s.db.QueryRow("SELECT id, email, password_hash, is_blocked, failed_attempts FROM Users WHERE email = ?", req.Email).
+		Scan(&user.ID, &user.Email, &hashedPassword, &user.IsBlocked, &user.FailedAttempts)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
@@ -104,53 +107,52 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if user is blocked
-	if isBlocked {
+	if user.IsBlocked {
 		sendResponse(w, http.StatusForbidden, "User is blocked due to multiple failed login attempts", nil)
 		return
 	}
 
 	// Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
-		// Increment failed_attempts count
-		failedAttempts++
-		s.db.Exec("UPDATE Users SET failed_attempts = ? WHERE id = ?", failedAttempts, userID)
-
-		// If reached threshold, block user
-		if failedAttempts >= 5 {
-			s.db.Exec("UPDATE Users SET is_blocked = TRUE WHERE id = ?", userID)
+		user.FailedAttempts++
+		s.db.Exec("UPDATE Users SET failed_attempts = ? WHERE id = ?", user.FailedAttempts, user.ID)
+		if user.FailedAttempts >= 5 {
+			s.db.Exec("UPDATE Users SET is_blocked = TRUE WHERE id = ?", user.ID)
+			s.db.Exec("UPDATE LoginStatus SET is_blocked = TRUE, last_failed_attempt = ? WHERE user_id = ?", time.Now(), user.ID)
 			sendResponse(w, http.StatusForbidden, "User has been blocked due to multiple failed login attempts", nil)
 			return
 		}
-
 		sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
 		return
 	}
 
-	// Reset failed_attempts on successful login
-	s.db.Exec("UPDATE Users SET failed_attempts = 0 WHERE id = ?", userID)
+	// Reset failed attempts on successful login
+	s.db.Exec("UPDATE Users SET failed_attempts = 0 WHERE id = ?", user.ID)
 
-	// Generate tokens using the utils package functions:
-	// Generate access token
-	accessToken, err := utils.GenerateTokens(req.Email)
+	// Generate JWT tokens
+	accessToken, err = utils.GenerateTokens(req.Email)
 	if err != nil {
 		sendResponse(w, http.StatusInternalServerError, "Access token generation failed", nil)
 		return
 	}
-	// Generate refresh token
-	refreshToken, err := utils.GenerateRefreshToken(req.Email)
+
+	refreshToken, err = utils.GenerateRefreshToken(req.Email)
 	if err != nil {
 		sendResponse(w, http.StatusInternalServerError, "Refresh token generation failed", nil)
 		return
 	}
 
-	// Store the refresh token in the database
-	if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, refreshToken); err != nil {
-		sendResponse(w, http.StatusInternalServerError, "Failed to store refresh token", nil)
+	// Store tokens in LoginStatus table
+	_, err = s.db.Exec(`INSERT INTO LoginStatus (user_id, access_token, refresh_token, last_login, is_blocked, failed_attempts) 
+		VALUES (?, ?, ?, ?, FALSE, 0) 
+		ON DUPLICATE KEY UPDATE access_token = ?, refresh_token = ?, last_login = ?, is_blocked = FALSE, failed_attempts = 0`,
+		user.ID, accessToken, refreshToken, time.Now(), accessToken, refreshToken, time.Now())
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Failed to store tokens", nil)
 		return
 	}
 
-	// Return both tokens in the response
-	sendResponse(w, http.StatusOK, "Password verified successfully", models.AuthResponse{
+	sendResponse(w, http.StatusOK, "Login successful", models.AuthResponse{
 		Token:        accessToken,
 		RefreshToken: refreshToken,
 	})
@@ -337,15 +339,22 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID int
-	err := s.db.QueryRow("SELECT user_id FROM SPN_PasswordResets WHERE otp_code = ? AND is_used = FALSE AND created_at >= NOW() - INTERVAL 10 MINUTE", req.OTP).Scan(&userID)
+	var userID, failedAttempts int
+	err := s.db.QueryRow("SELECT user_id, failed_attempts FROM PasswordResets WHERE otp_code = ? AND is_used = FALSE AND created_at >= NOW() - INTERVAL 10 MINUTE", req.OTP).Scan(&userID, &failedAttempts)
 	if err != nil {
+		failedAttempts++
+		s.db.Exec("UPDATE PasswordResets SET failed_attempts = ? WHERE otp_code = ?", failedAttempts, req.OTP)
+		if failedAttempts >= 5 {
+			s.db.Exec("UPDATE Users SET is_blocked = TRUE WHERE id = ?", userID)
+			sendResponse(w, http.StatusForbidden, "User has been blocked due to multiple failed OTP attempts", nil)
+			return
+		}
 		sendResponse(w, http.StatusUnauthorized, "Invalid or expired OTP", nil)
 		return
 	}
 
 	// Mark OTP as used
-	_, err = s.db.Exec("UPDATE SPN_PasswordResets SET is_used = TRUE WHERE otp_code = ?", req.OTP)
+	_, err = s.db.Exec("UPDATE PasswordResets SET is_used = TRUE WHERE otp_code = ?", req.OTP)
 	if err != nil {
 		sendResponse(w, http.StatusInternalServerError, "Failed to update OTP status", nil)
 		return
@@ -433,13 +442,19 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete the old refresh token from the database.
-	if _, err := s.db.Exec("DELETE FROM UserTokens WHERE user_id = ? AND token = ?", userID, req.RefreshToken); err != nil {
+	// Delete the old refresh token from the database (from the token column).
+	res, err := s.db.Exec("DELETE FROM LoginStatus WHERE user_id = ? AND refresh_token = ?", userID, req.RefreshToken)
+	if err != nil {
 		http.Error(w, "Failed to remove old refresh token", http.StatusInternalServerError)
 		return
 	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil || rowsAffected == 0 {
+		http.Error(w, "Refresh token not found", http.StatusUnauthorized)
+		return
+	}
 
-	// Generate new tokens using your existing functions.
+	// Generate new tokens.
 	newAccessToken, err := utils.GenerateTokens(email)
 	if err != nil {
 		http.Error(w, "Failed to generate new access token", http.StatusInternalServerError)
@@ -451,13 +466,14 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the new refresh token in the database.
-	if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, newRefreshToken); err != nil {
-		http.Error(w, "Failed to store new refresh token", http.StatusInternalServerError)
+	// Store the new tokens in the database.
+	_, err = s.db.Exec("INSERT INTO UserTokens (user_id, refresh_token, access_token) VALUES (?, ?, ?)", userID, newRefreshToken, newAccessToken)
+	if err != nil {
+		http.Error(w, "Failed to store new tokens", http.StatusInternalServerError)
 		return
 	}
 
-	// Return the new tokens in the response.
+	// Return the new tokens.
 	sendResponse(w, http.StatusOK, "Token refreshed", models.AuthResponse{
 		Token:        newAccessToken,
 		RefreshToken: newRefreshToken,
@@ -518,25 +534,34 @@ func (s *Server) fetchUserDetails(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// Assume token is provided in the Authorization header
+	// Get token from the Authorization header.
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		sendResponse(w, http.StatusUnauthorized, "Missing token", nil)
 		return
 	}
 
-	// Expecting header format "Bearer {token}"
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		sendResponse(w, http.StatusUnauthorized, "Invalid token format", nil)
 		return
 	}
-	tokenString := parts[1]
+	accessToken := parts[1]
 
-	// Remove token from the database
-	_, err := s.db.Exec("DELETE FROM UserTokens WHERE token = ?", tokenString)
+	// Delete the row from UserTokens where the access_token matches.
+	res, err := s.db.Exec("DELETE FROM LoginStatus WHERE access_token = ?", accessToken)
 	if err != nil {
 		sendResponse(w, http.StatusInternalServerError, "Logout failed", nil)
+		return
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Logout failed", nil)
+		return
+	}
+	if rowsAffected == 0 {
+		sendResponse(w, http.StatusUnauthorized, "Token already invalidated", nil)
 		return
 	}
 
