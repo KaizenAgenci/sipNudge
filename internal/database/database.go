@@ -18,7 +18,7 @@ import (
 type Service interface {
 	// Health returns a map of health status information.
 	// The keys and values in the map are service-specific.
-	
+
 	Health() map[string]string
 
 	// Close terminates the database connection.
@@ -35,10 +35,10 @@ type service struct {
 }
 
 var (
-	dbname     = getEnv(Constants.DbName, "own db credentials")
-	username   = getEnv(Constants.DbUser, "your local db username")
-	password   = getEnv(Constants.DbPassword, "local db password")
-	host       = getEnv(Constants.DbHost, "db host")
+	dbname     = getEnv(Constants.DbName, "u861689103_fitworks")
+	username   = getEnv(Constants.DbUser, "u861689103_FitWorksAdmin")
+	password   = getEnv(Constants.DbPassword, "FitWorks@2024")
+	host       = getEnv(Constants.DbHost, "auth-db1742.hstgr.io")
 	port       = getEnv(Constants.DbPort, "3306") // this won't change so far deafult port for mysql
 	dbInstance *service
 )
@@ -52,9 +52,8 @@ func getEnv(key, defaultValue string) string {
 	}
 	return value
 }
+
 //begin function
-
-
 
 func New() Service {
 	// Reuse Connection
@@ -131,7 +130,6 @@ func (s *service) Health() map[string]string {
 
 	return stats
 }
-
 
 // Execute single-row queries
 func (s *service) QueryRow(query string, args ...interface{}) *sql.Row {

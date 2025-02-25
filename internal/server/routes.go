@@ -9,17 +9,17 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"strings"
-	"sipNudge/internal/utils"
 	Constants "sipNudge/internal/constants"
 	"sipNudge/internal/models"
+	"sipNudge/internal/utils"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
 
-	"gopkg.in/gomail.v2"
+	gomail "gopkg.in/mail.v2"
 )
 
 // RegisterRoutes initializes all server routes
@@ -80,84 +80,81 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 
 // Sign-in logic
 func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
-    var req models.AuthRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        sendResponse(w, http.StatusBadRequest, "Invalid request format", nil)
-        return
-    }
+	var req models.AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendResponse(w, http.StatusBadRequest, "Invalid request format", nil)
+		return
+	}
 
-    var userID int
-    var hashedPassword string
-    var failedAttempts int
-    var isBlocked bool
+	var userID int
+	var hashedPassword string
+	var failedAttempts int
+	var isBlocked bool
 
-    // Fetch user info including failed_attempts and is_blocked
-    err := s.db.QueryRow("SELECT id, password_hash, failed_attempts, is_blocked FROM Users WHERE email = ?", req.Email).
-        Scan(&userID, &hashedPassword, &failedAttempts, &isBlocked)
-    if err != nil {
-        if err == sql.ErrNoRows {
-            sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-        } else {
-            sendResponse(w, http.StatusInternalServerError, "Database error", nil)
-        }
-        return
-    }
+	// Fetch user info including failed_attempts and is_blocked
+	err := s.db.QueryRow("SELECT id, password_hash, failed_attempts, is_blocked FROM Users WHERE email = ?", req.Email).
+		Scan(&userID, &hashedPassword, &failedAttempts, &isBlocked)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
+		} else {
+			sendResponse(w, http.StatusInternalServerError, "Database error", nil)
+		}
+		return
+	}
 
-    // Check if user is blocked
-    if isBlocked {
-        sendResponse(w, http.StatusForbidden, "User is blocked due to multiple failed login attempts", nil)
-        return
-    }
+	// Check if user is blocked
+	if isBlocked {
+		sendResponse(w, http.StatusForbidden, "User is blocked due to multiple failed login attempts", nil)
+		return
+	}
 
-    // Verify password
-    if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
-        // Increment failed_attempts count
-        failedAttempts++
-        s.db.Exec("UPDATE Users SET failed_attempts = ? WHERE id = ?", failedAttempts, userID)
+	// Verify password
+	if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
+		// Increment failed_attempts count
+		failedAttempts++
+		s.db.Exec("UPDATE Users SET failed_attempts = ? WHERE id = ?", failedAttempts, userID)
 
-        // If reached threshold, block user
-        if failedAttempts >= 5 {
-            s.db.Exec("UPDATE Users SET is_blocked = TRUE WHERE id = ?", userID)
-            sendResponse(w, http.StatusForbidden, "User has been blocked due to multiple failed login attempts", nil)
-            return
-        }
+		// If reached threshold, block user
+		if failedAttempts >= 5 {
+			s.db.Exec("UPDATE Users SET is_blocked = TRUE WHERE id = ?", userID)
+			sendResponse(w, http.StatusForbidden, "User has been blocked due to multiple failed login attempts", nil)
+			return
+		}
 
-        sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-        return
-    }
+		sendResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
+		return
+	}
 
-    // Reset failed_attempts on successful login
-    s.db.Exec("UPDATE Users SET failed_attempts = 0 WHERE id = ?", userID)
+	// Reset failed_attempts on successful login
+	s.db.Exec("UPDATE Users SET failed_attempts = 0 WHERE id = ?", userID)
 
-    // Generate tokens using the utils package functions:
-    // Generate access token
-    accessToken, err := utils.GenerateTokens(req.Email)
-    if err != nil {
-        sendResponse(w, http.StatusInternalServerError, "Access token generation failed", nil)
-        return
-    }
-    // Generate refresh token
-    refreshToken, err := utils.GenerateRefreshToken(req.Email)
-    if err != nil {
-        sendResponse(w, http.StatusInternalServerError, "Refresh token generation failed", nil)
-        return
-    }
+	// Generate tokens using the utils package functions:
+	// Generate access token
+	accessToken, err := utils.GenerateTokens(req.Email)
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Access token generation failed", nil)
+		return
+	}
+	// Generate refresh token
+	refreshToken, err := utils.GenerateRefreshToken(req.Email)
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Refresh token generation failed", nil)
+		return
+	}
 
-    // Store the refresh token in the database
-    if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, refreshToken); err != nil {
-        sendResponse(w, http.StatusInternalServerError, "Failed to store refresh token", nil)
-        return
-    }
+	// Store the refresh token in the database
+	if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, refreshToken); err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Failed to store refresh token", nil)
+		return
+	}
 
-    // Return both tokens in the response
-    sendResponse(w, http.StatusOK, "Password verified successfully", models.AuthResponse{
-        Token:        accessToken,
-        RefreshToken: refreshToken,
-    })
+	// Return both tokens in the response
+	sendResponse(w, http.StatusOK, "Password verified successfully", models.AuthResponse{
+		Token:        accessToken,
+		RefreshToken: refreshToken,
+	})
 }
-
-
-
 
 // Sign-up logic
 func (s *Server) handleSignUp(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +353,7 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	sendResponse(w, http.StatusOK, "OTP verified successfully", nil)
 }
+
 // Reset password
 func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	var req models.ResetPasswordRequest
@@ -399,74 +397,72 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
-    var req models.RefreshTokenRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
+	var req models.RefreshTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
 
-    // Validate the provided refresh token.
-    jwtSecret := []byte(os.Getenv(Constants.JwtSecret))
-    token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
-        return jwtSecret, nil
-    })
-    if err != nil || !token.Valid {
-        http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
-        return
-    }
+	// Validate the provided refresh token.
+	jwtSecret := []byte(os.Getenv(Constants.JwtSecret))
+	token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
+		return jwtSecret, nil
+	})
+	if err != nil || !token.Valid {
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+		return
+	}
 
-    // Extract email from token claims.
-    claims, ok := token.Claims.(jwt.MapClaims)
-    if !ok {
-        http.Error(w, "Invalid token claims", http.StatusUnauthorized)
-        return
-    }
-    email, ok := claims["email"].(string)
-    if !ok {
-        http.Error(w, "Email claim not found", http.StatusUnauthorized)
-        return
-    }
+	// Extract email from token claims.
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+		return
+	}
+	email, ok := claims["email"].(string)
+	if !ok {
+		http.Error(w, "Email claim not found", http.StatusUnauthorized)
+		return
+	}
 
-    // Retrieve the user ID based on email.
-    var userID int
-    err = s.db.QueryRow("SELECT id FROM Users WHERE email = ?", email).Scan(&userID)
-    if err != nil {
-        http.Error(w, "User not found", http.StatusUnauthorized)
-        return
-    }
+	// Retrieve the user ID based on email.
+	var userID int
+	err = s.db.QueryRow("SELECT id FROM Users WHERE email = ?", email).Scan(&userID)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusUnauthorized)
+		return
+	}
 
-    // Delete the old refresh token from the database.
-    if _, err := s.db.Exec("DELETE FROM UserTokens WHERE user_id = ? AND token = ?", userID, req.RefreshToken); err != nil {
-        http.Error(w, "Failed to remove old refresh token", http.StatusInternalServerError)
-        return
-    }
+	// Delete the old refresh token from the database.
+	if _, err := s.db.Exec("DELETE FROM UserTokens WHERE user_id = ? AND token = ?", userID, req.RefreshToken); err != nil {
+		http.Error(w, "Failed to remove old refresh token", http.StatusInternalServerError)
+		return
+	}
 
-    // Generate new tokens using your existing functions.
-    newAccessToken, err := utils.GenerateTokens(email)
-    if err != nil {
-        http.Error(w, "Failed to generate new access token", http.StatusInternalServerError)
-        return
-    }
-    newRefreshToken, err := utils.GenerateRefreshToken(email)
-    if err != nil {
-        http.Error(w, "Failed to generate new refresh token", http.StatusInternalServerError)
-        return
-    }
+	// Generate new tokens using your existing functions.
+	newAccessToken, err := utils.GenerateTokens(email)
+	if err != nil {
+		http.Error(w, "Failed to generate new access token", http.StatusInternalServerError)
+		return
+	}
+	newRefreshToken, err := utils.GenerateRefreshToken(email)
+	if err != nil {
+		http.Error(w, "Failed to generate new refresh token", http.StatusInternalServerError)
+		return
+	}
 
-    // Store the new refresh token in the database.
-    if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, newRefreshToken); err != nil {
-        http.Error(w, "Failed to store new refresh token", http.StatusInternalServerError)
-        return
-    }
+	// Store the new refresh token in the database.
+	if _, err := s.db.Exec("INSERT INTO UserTokens (user_id, token) VALUES (?, ?)", userID, newRefreshToken); err != nil {
+		http.Error(w, "Failed to store new refresh token", http.StatusInternalServerError)
+		return
+	}
 
-    // Return the new tokens in the response.
-    sendResponse(w, http.StatusOK, "Token refreshed", models.AuthResponse{
-        Token:        newAccessToken,
-        RefreshToken: newRefreshToken,
-    })
+	// Return the new tokens in the response.
+	sendResponse(w, http.StatusOK, "Token refreshed", models.AuthResponse{
+		Token:        newAccessToken,
+		RefreshToken: newRefreshToken,
+	})
 }
-
-
 
 // Fetch user login details from Users table
 func (s *Server) fetchUserLoginDetails(w http.ResponseWriter, r *http.Request) {
@@ -521,30 +517,28 @@ func (s *Server) fetchUserDetails(w http.ResponseWriter, r *http.Request) {
 	sendResponse(w, http.StatusOK, "User details fetched successfully", userDetails)
 }
 
-
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-    // Assume token is provided in the Authorization header
-    authHeader := r.Header.Get("Authorization")
-    if authHeader == "" {
-        sendResponse(w, http.StatusUnauthorized, "Missing token", nil)
-        return
-    }
-    
-    // Expecting header format "Bearer {token}"
-    parts := strings.Split(authHeader, " ")
-    if len(parts) != 2 || parts[0] != "Bearer" {
-        sendResponse(w, http.StatusUnauthorized, "Invalid token format", nil)
-        return
-    }
-    tokenString := parts[1]
+	// Assume token is provided in the Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		sendResponse(w, http.StatusUnauthorized, "Missing token", nil)
+		return
+	}
 
+	// Expecting header format "Bearer {token}"
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		sendResponse(w, http.StatusUnauthorized, "Invalid token format", nil)
+		return
+	}
+	tokenString := parts[1]
 
-    // Remove token from the database
-    _, err := s.db.Exec("DELETE FROM UserTokens WHERE token = ?", tokenString)
-    if err != nil {
-        sendResponse(w, http.StatusInternalServerError, "Logout failed", nil)
-        return
-    }
+	// Remove token from the database
+	_, err := s.db.Exec("DELETE FROM UserTokens WHERE token = ?", tokenString)
+	if err != nil {
+		sendResponse(w, http.StatusInternalServerError, "Logout failed", nil)
+		return
+	}
 
-    sendResponse(w, http.StatusOK, "Logout successful", nil)
+	sendResponse(w, http.StatusOK, "Logout successful", nil)
 }
